@@ -49,7 +49,7 @@ func (c *ConfigGenerator) Init(metadataServer *string) error {
 
 func (c *ConfigGenerator) GenerateAnswers() (Answers, error) {
 	answers := make(Answers)
-	aRecs, cRecs, clientIpsToServiceLinks, clientIpsToContainerLinks, clientIpToContainer, svcNameToSvc, err := c.GetRecords()
+	aRecs, cRecs, ptrRecs, clientIpsToServiceLinks, clientIpsToContainerLinks, clientIpToContainer, svcNameToSvc, err := c.GetRecords()
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +125,7 @@ func (c *ConfigGenerator) GenerateAnswers() (Answers, error) {
 	a := ClientAnswers{
 		A:             aRecs,
 		Cname:         cRecs,
+		Ptr:           ptrRecs,
 		Search:        []string{getDefaultRancherNamespace()},
 		Recurse:       globalRecurse,
 		Authoritative: []string{getDefaultRancherNamespace()},
@@ -142,9 +143,10 @@ func invalidRecurse(dns string) bool {
 	return result || strings.HasPrefix(dns, "127.")
 }
 
-func (c *ConfigGenerator) GetRecords() (map[string]RecordA, map[string]RecordCname, map[string]map[string]string, map[string]map[string]string, map[string]metadata.Container, map[string]metadata.Service, error) {
+func (c *ConfigGenerator) GetRecords() (map[string]RecordA, map[string]RecordCname, map[string]RecordPtr, map[string]map[string]string, map[string]map[string]string, map[string]metadata.Container, map[string]metadata.Service, error) {
 	aRecs := make(map[string]RecordA)
 	cRecs := make(map[string]RecordCname)
+	ptrRecs := make(map[string]RecordPtr)
 	clientIpsToServiceLinks := make(map[string]map[string]string)
 	clientIpToContainer := make(map[string]metadata.Container)
 	svcNameToSvc := make(map[string]metadata.Service)
@@ -152,16 +154,16 @@ func (c *ConfigGenerator) GetRecords() (map[string]RecordA, map[string]RecordCna
 
 	services, err := c.metaFetcher.GetServices()
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	containers, err := c.metaFetcher.GetContainers()
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 
 	host, err := c.metaFetcher.GetSelfHost()
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 
 	selfEnvironmentUUID := host.EnvironmentUUID
@@ -183,7 +185,7 @@ func (c *ConfigGenerator) GetRecords() (map[string]RecordA, map[string]RecordCna
 		svcNameToSvc[fmt.Sprintf("%s/%s", svc.StackName, svc.Name)] = svc
 		records, err := c.getServiceEndpoints(&svc, uuidToPrimaryIp)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 		for i, rec := range records {
 			if rec.IsCname {
@@ -228,6 +230,16 @@ func (c *ConfigGenerator) GetRecords() (map[string]RecordA, map[string]RecordCna
 				}
 				//add to container record
 				aRecs[getContainerFqdn(rec.Container, &svc)] = aRec
+
+				pp := strings.Split(rec.Container.PrimaryIp, ".")
+				if len(pp) == 4 {
+					ptrRec := RecordPtr{
+						Answer: getContainerFqdn(rec.Container, &svc),
+					}
+					rip := strings.Join([]string{pp[3], pp[2], pp[1], pp[0]}, ".") + ".in-addr.arpa."
+					ptrRecs[rip] = ptrRec
+				}
+
 				//client section only for the containers running on the same host
 				if rec.Container.HostUUID == host.UUID {
 					clientIpToContainer[rec.Container.PrimaryIp] = (*rec.Container)
@@ -295,7 +307,7 @@ func (c *ConfigGenerator) GetRecords() (map[string]RecordA, map[string]RecordCna
 	//add to the service record
 	aRecs[fmt.Sprintf("rancher-metadata.%s.", getDefaultRancherNamespace())] = aRec
 
-	return aRecs, cRecs, clientIpsToServiceLinks, clientIpsToContainerLinks, clientIpToContainer, svcNameToSvc, nil
+	return aRecs, cRecs, ptrRecs, clientIpsToServiceLinks, clientIpsToContainerLinks, clientIpToContainer, svcNameToSvc, nil
 }
 
 func splitTrim(s string, sep string) []string {
